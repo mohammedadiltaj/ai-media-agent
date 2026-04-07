@@ -2,7 +2,24 @@ import os
 import json
 from datetime import datetime
 from google import genai
+from duckduckgo_search import DDGS
+import logging
 from agent.models import AgentRequest, AgentDecision
+
+def fetch_market_insights(genre: str, description: str) -> str:
+    try:
+        current_year = datetime.now().year
+        query = f"{genre} streaming theatrical market trends popularity value {current_year}"
+        results = []
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=3):
+                results.append(f"- {r['title']}: {r['body']}")
+        if not results:
+            return "No specific real-time market data found."
+        return "\n".join(results)
+    except Exception as e:
+        logging.warning(f"Error fetching market insights: {e}")
+        return "Real-time market insights currently unavailable due to search error."
 
 # Setting up flat file logging for visibility
 LOG_FILE = "/app/agent_execution.log.md"
@@ -42,11 +59,16 @@ class MediaAgent:
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
 
-    def generate_prompt(self, request: AgentRequest) -> str:
+    def generate_prompt(self, request: AgentRequest, market_insights: str = "") -> str:
         c = request.content
+        current_date_str = datetime.now().strftime("%A, %B %d, %Y")
+        
         prompt = f"""
 You are an expert, autonomous AI agent working for a top-tier media company.
 Your mission is to maximize the lifetime value (LTV) of every title by crafting optimal release strategies.
+
+Today's Current Date is: {current_date_str}
+You MUST base all your release schedules and estimations on this current date.
 
 You have been given the following content metadata for a title:
 
@@ -55,14 +77,17 @@ You have been given the following content metadata for a title:
 - Duration: {c.duration_minutes} minutes
 - Description: {c.description}
 
-Based solely on this content metadata, you must autonomously determine the optimal:
+Real-Time Market Context:
+{market_insights}
+
+Based on this content metadata AND the real-time market context provided, you must autonomously determine the optimal:
 1. Release schedule (timing, cadence, exclusivity windows)
 2. Windowing strategy (platform sequencing, holdback periods)
 3. Promotional spend allocation (across channels: Social, TV, Digital, PR, Influencer, etc.)
 4. Platform placement (which streaming/distribution platforms to target and in what order)
 
 Critical requirements:
-- Your "reasoning" field MUST be a detailed, specific explanation of WHY you made each strategic choice, directly referencing the genre, duration, and description provided. This should read like a senior strategist explaining their thinking.
+- Your "reasoning" field MUST be a detailed, specific explanation of WHY you made each strategic choice, directly referencing the genre, duration, content description, AND the real-time market context. Explain how current market trends influenced your strategy.
 - Base all decisions on the genre conventions, likely audience, and content characteristics implied by the description and duration.
 - Be specific and actionable in your recommendations.
 
@@ -81,7 +106,8 @@ Respond ONLY with a valid JSON object matching this exact schema. No markdown, n
         return prompt.strip()
 
     def run(self, request: AgentRequest) -> AgentDecision:
-        prompt = self.generate_prompt(request)
+        market_insights = fetch_market_insights(request.content.genre, request.content.description)
+        prompt = self.generate_prompt(request, market_insights)
         raw_output = ""
 
         try:
